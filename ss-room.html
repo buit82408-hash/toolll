@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Phòng SS</title>
+<style>
+:root{--bg:#0c1f24;--panel:#123038;--line:#1f4650;--text:#e6f2f1;--muted:#8fb3b3;--acc:#5ec8e5;--ok:#4fd1a5;--warn:#f0b84a;--bad:#ef6a6a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:560px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:26px;margin:0 0 4px;letter-spacing:-.01em}
+h2{font-size:17px;margin:0 0 4px}
+p{margin:6px 0;color:var(--muted)}
+.code{display:inline-block;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 10px;color:var(--acc);font-weight:600}
+section{margin-top:18px}
+input[type=text]{width:100%;padding:12px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:16px}
+button,.pick{display:inline-block;border:0;border-radius:8px;background:var(--acc);color:#04222a;font-weight:700;font-size:16px;padding:12px 18px;cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,.pick:focus-within,input:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.timer{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:baseline}
+.timer b{font-size:28px;font-variant-numeric:tabular-nums}
+.timer.low b{color:var(--bad)}
+.step{border:1px solid var(--line);background:var(--panel);border-left-width:5px;border-radius:8px;padding:14px;margin:12px 0}
+.step.ok{border-left-color:var(--ok)}.step.warn{border-left-color:var(--warn)}.step.bad{border-left-color:var(--bad)}
+.step input[type=file]{position:absolute;opacity:0;width:1px;height:1px}
+.pick{position:relative;margin-top:8px;padding:9px 14px;font-size:15px}
+.res{margin-top:8px;font-size:15px}
+.res.ok{color:var(--ok)}.res.warn{color:var(--warn)}.res.bad{color:var(--bad)}
+.note{font-size:14px;color:var(--muted)}
+img.th{display:block;max-width:100%;max-height:160px;margin-top:8px;border-radius:6px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+<h1>Phòng SS</h1>
+<p>Mã phiên: <span class="code" id="code"></span></p>
+
+<section id="intro">
+  <h2>Trước khi bắt đầu</h2>
+  <p>Bạn có <span id="mins"></span> phút để làm hết các bước. Mỗi bước cần chụp màn hình rồi tải lên. Không thoát trang, không xóa file trong lúc làm.</p>
+  <p>Ảnh phải được chụp sau khi bấm bắt đầu.</p>
+  <p style="margin-top:14px"><label for="nick">Tên trong game</label></p>
+  <input type="text" id="nick" autocomplete="off" maxlength="32">
+  <p style="margin-top:14px"><button id="start">Bắt đầu</button></p>
+</section>
+
+<section id="run" hidden>
+  <div class="timer" id="timer"><span>Thời gian còn lại</span><b id="clock">00:00</b></div>
+  <div id="steps"></div>
+  <p id="warn" class="note"></p>
+  <button id="send">Gửi cho staff</button>
+</section>
+
+<section id="done" hidden>
+  <h2 id="doneTitle"></h2>
+  <p id="doneText"></p>
+</section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script>
+const CFG = {
+  webhook: "https://discord.com/api/webhooks/1569347598400360472/wqidlSPeNKLiIXEsq6BtFtA0wfHk6M2YAku96U_6ga9GRX4PQgebe2gF93MlQv_MASNq",
+  minutes: 5
+};
+const STEPS = [
+  {t:"Thư mục game của launcher", d:"Mở app quản lý file, vào thư mục dữ liệu của launcher (nơi có mods, versions, saves...). Chụp màn hình.", k:["mods","versions","resourcepacks","saves","options","logs","libraries","minecraft","pojav"]},
+  {t:"Thư mục mods", d:"Mở thư mục mods (nếu có). Chụp thấy toàn bộ danh sách file .jar.", k:["mods",".jar","jar","fabric","forge","optifine","sodium"]},
+  {t:"Ứng dụng đã cài", d:"Vào Cài đặt > Ứng dụng, cuộn danh sách ứng dụng đã cài. Chụp từng trang rồi ghép lại hoặc chụp màn hình cuộn.", k:["apps","ung dung","installed","da cai","cai dat","settings","applications"]},
+  {t:"Tải xuống gần đây", d:"Mở mục Tải xuống (Downloads) của máy và chụp danh sách mới nhất.", k:["download","downloads","tai xuong","recent","gan day"]},
+  {t:"Hồ sơ phiên bản trong launcher", d:"Mở launcher, vào danh sách profile hoặc phiên bản đang dùng. Chụp màn hình.", k:["version","profile","phien ban","1.21","1.20","1.19","1.8","fabric","forge","vanilla"]}
+];
+const $ = s => document.querySelector(s);
+const params = new URLSearchParams(location.search);
+const CODE = (params.get("code") || "KHONG-MA").slice(0, 24);
+const norm = s => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d");
+const RANK = {ok:0, warn:1, bad:2};
+const state = STEPS.map(() => ({level:null, notes:[], hits:[], blob:null, hash:null}));
+let startAt = 0, timerId = 0, worker = null, expired = false;
+
+$("#code").textContent = CODE;
+$("#mins").textContent = CFG.minutes;
+
+try { const s = sessionStorage.getItem("ss-" + CODE); if (s) { startAt = +s; begin(true); } } catch (e) {}
+
+$("#start").onclick = () => {
+  const n = $("#nick").value.trim();
+  if (!n) { $("#nick").focus(); return; }
+  startAt = Date.now();
+  try { sessionStorage.setItem("ss-" + CODE, startAt); sessionStorage.setItem("ss-nick", n); } catch (e) {}
+  begin(false);
+};
+
+function begin(resumed) {
+  $("#intro").hidden = true;
+  $("#run").hidden = false;
+  buildSteps();
+  tick();
+  timerId = setInterval(tick, 500);
+}
+
+function tick() {
+  const left = Math.max(0, startAt + CFG.minutes * 60000 - Date.now());
+  const m = String(Math.floor(left / 60000)).padStart(2, "0");
+  const s = String(Math.floor(left / 1000) % 60).padStart(2, "0");
+  $("#clock").textContent = m + ":" + s;
+  $("#timer").classList.toggle("low", left < 60000);
+  if (left === 0 && !expired) {
+    expired = true;
+    document.querySelectorAll(".step input").forEach(i => i.disabled = true);
+    $("#warn").textContent = "Hết giờ. Bạn chỉ còn gửi được những bước đã nộp.";
+  }
+}
+
+function buildSteps() {
+  const box = $("#steps");
+  STEPS.forEach((st, i) => {
+    const el = document.createElement("div");
+    el.className = "step";
+    el.id = "st" + i;
+    el.innerHTML = '<h2></h2><p></p><label class="pick">Chọn ảnh<input type="file" accept="image/*"></label><div class="res"></div><img class="th" hidden alt="">';
+    el.querySelector("h2").textContent = "Bước " + (i + 1) + ": " + st.t;
+    el.querySelector("p").textContent = st.d;
+    el.querySelector("input").onchange = e => { if (e.target.files[0]) onFile(i, e.target.files[0]); };
+    box.appendChild(el);
+  });
+}
+
+function show(i, level, text) {
+  const el = $("#st" + i);
+  el.className = "step " + (level || "");
+  const r = el.querySelector(".res");
+  r.className = "res " + (level || "");
+  r.textContent = text;
+}
+
+async function sha(file) {
+  try {
+    const buf = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+  } catch (e) { return file.size + "-" + file.lastModified; }
+}
+
+async function shrink(file, maxW) {
+  const bmp = await createImageBitmap(file);
+  const sc = Math.min(1, maxW / bmp.width);
+  const c = document.createElement("canvas");
+  c.width = Math.round(bmp.width * sc);
+  c.height = Math.round(bmp.height * sc);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  return new Promise(res => c.toBlob(res, "image/jpeg", 0.75));
+}
+
+async function getWorker() {
+  if (!worker) worker = await Tesseract.createWorker("eng+vie");
+  return worker;
+}
+
+async function onFile(i, file) {
+  show(i, "warn", "Đang đọc ảnh...");
+  const S = state[i], notes = [];
+  let level = "ok";
+  const bump = l => { if (RANK[l] > RANK[level]) level = l; };
+  try {
+    S.hash = await sha(file);
+    const dupe = state.findIndex((o, j) => j !== i && o.hash === S.hash);
+    if (dupe >= 0) { notes.push("Ảnh trùng với bước " + (dupe + 1)); bump("bad"); }
+    if (file.lastModified && file.lastModified < startAt - 3000) { notes.push("Ảnh chụp trước khi bắt đầu phiên"); bump("bad"); }
+    const blob = await shrink(file, 1600);
+    S.blob = blob;
+    const th = $("#st" + i + " img");
+    th.src = URL.createObjectURL(blob);
+    th.hidden = false;
+    const w = await getWorker();
+    const out = await w.recognize(blob);
+    const text = norm(out.data.text || "");
+    S.hits = STEPS[i].k.filter(k => text.includes(norm(k)));
+    if (S.hits.length >= 2) {} else if (S.hits.length === 1) { notes.push("Chỉ khớp 1 từ khóa"); bump("warn"); }
+    else { notes.push("Không thấy nội dung đúng bước"); bump("bad"); }
+  } catch (e) {
+    notes.push("Không đọc được ảnh");
+    bump("warn");
+  }
+  S.level = level; S.notes = notes;
+  const label = {ok:"Đạt", warn:"Nghi vấn", bad:"Không đạt"}[level];
+  show(i, level, label + (notes.length ? ": " + notes.join("; ") : "") + (S.hits.length ? " (khớp: " + S.hits.join(", ") + ")" : ""));
+}
+
+$("#send").onclick = async () => {
+  const btn = $("#send");
+  btn.disabled = true;
+  const nick = (sessionStorage.getItem("ss-nick") || "?");
+  const icon = {ok:"✅ Đạt", warn:"⚠️ Nghi vấn", bad:"❌ Không đạt"};
+  let worst = 0, missing = 0;
+  const fields = STEPS.map((st, i) => {
+    const S = state[i];
+    if (!S.level) { missing++; return {name:"Bước " + (i + 1) + ": " + st.t, value:"⬜ Chưa nộp"}; }
+    worst = Math.max(worst, RANK[S.level]);
+    return {name:"Bước " + (i + 1) + ": " + st.t, value:icon[S.level] + (S.notes.length ? " — " + S.notes.join("; ") : "") + (S.hits.length ? "\nKhớp: " + S.hits.join(", ") : "")};
+  });
+  const full = missing === 0 && worst === 0;
+  const spent = Math.round((Date.now() - startAt) / 1000);
+  const payload = {
+    username: "Phòng SS",
+    embeds: [{
+      title: "SS " + CODE + " — " + nick,
+      description: (full ? "Đã làm đủ các bước hướng dẫn." : "Chưa làm đủ hoặc có bước nghi vấn, staff xem ảnh.") + (expired ? "\nNộp sau khi hết giờ." : ""),
+      color: full ? 0x4fd1a5 : (worst === 2 || missing ? 0xef6a6a : 0xf0b84a),
+      fields,
+      footer: {text: "Dùng " + spent + "s • " + navigator.userAgent.slice(0, 90) + " • " + Intl.DateTimeFormat().resolvedOptions().timeZone}
+    }]
+  };
+  const fd = new FormData();
+  fd.append("payload_json", JSON.stringify(payload));
+  let n = 0;
+  state.forEach((S, i) => { if (S.blob) fd.append("files[" + n++ + "]", S.blob, "buoc" + (i + 1) + ".jpg"); });
+  try {
+    const r = await fetch(CFG.webhook, {method:"POST", body:fd});
+    if (!r.ok) throw new Error(r.status);
+    clearInterval(timerId);
+    $("#run").hidden = true;
+    $("#done").hidden = false;
+    $("#doneTitle").textContent = full ? "Đã gửi, bạn đã làm đủ các bước" : "Đã gửi, còn bước chưa đạt";
+    $("#doneText").textContent = "Staff sẽ xem ảnh và kết luận. Hãy chờ trong kênh SS, không thoát game.";
+  } catch (e) {
+    btn.disabled = false;
+    $("#warn").textContent = "Gửi lỗi. Kiểm tra mạng rồi bấm gửi lại.";
+  }
+};
+</script>
+</body>
+</html>
